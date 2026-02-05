@@ -154,6 +154,11 @@ class StructureDiversityReward(RewardComponent):
 
     required_metrics = ["structure_diversity"]
 
+    def __init__(self, max_num_reference: int = 50000, **kwargs):
+        super().__init__(**kwargs)
+        self.max_num_reference = max_num_reference
+        self._cached_ref_features = None
+
     def compute(
         self,
         gen_structures: list[Structure],
@@ -161,23 +166,30 @@ class StructureDiversityReward(RewardComponent):
         device: torch.device,
         **kwargs,
     ) -> torch.Tensor:
-        # Get reference structure features
-        assert metrics_obj._reference_structure_features is not None
-        ref_structure_features: torch.Tensor = metrics_obj._reference_structure_features
+        # Cache reference features on first call (on CPU)
+        if self._cached_ref_features is None:
+            ref_structure_features = metrics_obj._reference_structure_features
+            assert ref_structure_features is not None
 
-        # Get generated structure features
+            if len(ref_structure_features) > self.max_num_reference:
+                indices = torch.randperm(len(ref_structure_features))[
+                    : self.max_num_reference
+                ]
+                self._cached_ref_features = ref_structure_features[indices]
+            else:
+                self._cached_ref_features = ref_structure_features
+
+        # Compute on CPU
         gen_features = featurize(gen_structures)
-        gen_structure_features = gen_features["structure_features"].to(device)
-        ref_structure_features = ref_structure_features.to(device)
-        if len(ref_structure_features) > 50000:  # Subsample for efficiency
-            indices = torch.randperm(len(ref_structure_features))[:50000]
-            ref_structure_features = ref_structure_features[indices]
+        gen_structure_features = gen_features["structure_features"]
 
-        # Compute MMD reward
+        # MMD computation on CPU (no GPU memory needed)
         r_structure_diversity = mmd_reward(
-            z_gen=gen_structure_features, z_ref=ref_structure_features
+            z_gen=gen_structure_features, z_ref=self._cached_ref_features
         )["r_indiv"]
-        return r_structure_diversity
+
+        # Move result to target device
+        return r_structure_diversity.to(device)
 
 
 class CompositionDiversityReward(RewardComponent):
@@ -185,6 +197,11 @@ class CompositionDiversityReward(RewardComponent):
 
     required_metrics = ["composition_diversity"]
 
+    def __init__(self, max_num_reference: int = 50000, **kwargs):
+        super().__init__(**kwargs)
+        self.max_num_reference = max_num_reference
+        self._cached_ref_features = None
+
     def compute(
         self,
         gen_structures: list[Structure],
@@ -192,25 +209,30 @@ class CompositionDiversityReward(RewardComponent):
         device: torch.device,
         **kwargs,
     ) -> torch.Tensor:
-        # Get reference composition features
-        assert metrics_obj._reference_composition_features is not None
-        ref_composition_features: torch.Tensor = (
-            metrics_obj._reference_composition_features
-        )
+        # Cache reference features on first call (on CPU)
+        if self._cached_ref_features is None:
+            ref_composition_features = metrics_obj._reference_composition_features
+            assert ref_composition_features is not None
 
-        # Get generated composition features
+            if len(ref_composition_features) > self.max_num_reference:
+                indices = torch.randperm(len(ref_composition_features))[
+                    : self.max_num_reference
+                ]
+                self._cached_ref_features = ref_composition_features[indices]
+            else:
+                self._cached_ref_features = ref_composition_features
+
+        # Compute on CPU
         gen_features = featurize(gen_structures)
-        gen_composition_features = gen_features["composition_features"].to(device)
-        ref_composition_features = ref_composition_features.to(device)
-        if len(ref_composition_features) > 50000:  # Subsample for efficiency
-            indices = torch.randperm(len(ref_composition_features))[:50000]
-            ref_composition_features = ref_composition_features[indices]
+        gen_composition_features = gen_features["composition_features"]
 
-        # Compute MMD reward
+        # MMD computation on CPU (no GPU memory needed)
         r_composition_diversity = mmd_reward(
-            z_gen=gen_composition_features, z_ref=ref_composition_features
+            z_gen=gen_composition_features, z_ref=self._cached_ref_features
         )["r_indiv"]
-        return r_composition_diversity
+
+        # Move result to target device
+        return r_composition_diversity.to(device)
 
 
 ###############################################################################
@@ -231,8 +253,14 @@ def normalize(x: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
     return x.clamp(0.0, 1.0)
 
 
-def mmd_reward(z_gen, z_ref):
-    """Training Diffusion Models Towards Diverse Image Generation with Reinforcement Learning."""
+def mmd_reward(z_gen, z_ref, r_term=None):
+    """Training Diffusion Models Towards Diverse Image Generation with Reinforcement Learning.
+
+    Args:
+        z_gen: Generated sample features.
+        z_ref: Reference sample features.
+        r_term: Pre-computed R_term scalar. If provided, skips k_rr computation.
+    """
 
     def poly_k(z, y, deg=3):
         d = z.size(-1)
@@ -241,11 +269,14 @@ def mmd_reward(z_gen, z_ref):
     M, N = len(z_gen), len(z_ref)
 
     k_gg = poly_k(z_gen, z_gen)
-    k_rr = poly_k(z_ref, z_ref)
     k_gr = poly_k(z_gen, z_ref)
 
-    # Compute MMD
-    R_term = (k_rr.sum() - k_rr.trace()) / (N * (N - 1))
+    # Compute R_term (skip if pre-computed)
+    if r_term is None:
+        k_rr = poly_k(z_ref, z_ref)
+        R_term = (k_rr.sum() - k_rr.trace()) / (N * (N - 1))
+    else:
+        R_term = r_term
     G = k_gg.sum() - k_gg.trace()
     C = k_gr.sum()
     mmd_full = G / (M * (M - 1)) + R_term - 2 * C / (M * N)  # Eq. (11)
