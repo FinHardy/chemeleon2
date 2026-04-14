@@ -52,6 +52,7 @@ class ReinforceReward(torch.nn.Module):
         # Compute rewards from all components
         device = device if device is not None else batch_gen.pos.device
         total_rewards = torch.zeros(len(batch_gen), device=device)
+        self._breakdown: dict[str, torch.Tensor] = {}
         for component in self.components:
             comp_rewards = component(
                 batch_gen=batch_gen,
@@ -60,6 +61,8 @@ class ReinforceReward(torch.nn.Module):
                 device=device,
             )
             total_rewards += comp_rewards
+            if component.metric_key:
+                self._breakdown[component.metric_key] = comp_rewards
 
         if torch.isnan(total_rewards).any():
             raise ValueError("NaN values found in rewards.")

@@ -19,6 +19,9 @@ class RewardComponent(ABC, torch.nn.Module):
     """Base class for all reward components."""
 
     required_metrics: list[str] = []
+    # Override in subclasses to enable per-component W&B logging.
+    # An empty string means this component is not logged individually.
+    metric_key: str = ""
 
     def __init__(
         self,

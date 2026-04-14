@@ -265,6 +265,10 @@ class RLModule(LightningModule):
         total_res.update(
             dict(reward=rewards.mean().item(), advantages=advantages.mean().item())
         )
+        # Per-component breakdown (populated by ReinforceReward for components
+        # that set metric_key, e.g. the Phase 1 FE reward components)
+        for key, val in getattr(self.reward_fn, "_breakdown", {}).items():
+            total_res[key] = val.mean().item()
         self._log_metrics(res=total_res, split="train", batch_size=batch.num_graphs)
 
     def validation_step(self, batch: CrystalBatch, batch_idx: int) -> dict:
@@ -283,11 +287,10 @@ class RLModule(LightningModule):
         # Compute rewards
         rewards, advantages = self.compute_rewards(batch_gen)
 
-        self._log_metrics(
-            dict(reward=rewards.mean().item(), advantages=advantages.mean().item()),
-            split="val",
-            batch_size=batch.num_graphs,
-        )
+        val_metrics = dict(reward=rewards.mean().item(), advantages=advantages.mean().item())
+        for key, val in getattr(self.reward_fn, "_breakdown", {}).items():
+            val_metrics[key] = val.mean().item()
+        self._log_metrics(val_metrics, split="val", batch_size=batch.num_graphs)
 
     def state_dict(self, *args, **kwargs):
         """Save the checkpoint of the diffusion_module than reinforce module."""

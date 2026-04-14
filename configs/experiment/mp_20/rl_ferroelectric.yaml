@@ -1,0 +1,69 @@
+# @package _global_
+# GRPO for ferroelectric discovery on MP-20 — Phase 1
+#
+# Extends the base RL/DNG config with three cheap structure-based rewards
+# that push the policy toward non-centrosymmetric polar structures.
+#
+# Usage:
+#   python src/train_rl.py experiment=mp_20/rl_ferroelectric
+#
+# Training schedule:
+#   Steps 0–1000:  run with base rewards only (set w_polar_* and w_fe_* to 0)
+#                  to establish structural validity before activating FE rewards.
+#   Steps 1000+:   activate FE rewards (weights below).
+
+data:
+  batch_size: 5
+
+rl_module:
+  ldm_ckpt_path: ${hub:mp_20_ldm_base}
+  vae_ckpt_path: ${hub:mp_20_vae}
+
+  rl_configs:
+    num_group_samples: 64
+    group_reward_norm: true
+
+  reward_fn:
+    _target_: src.rl_module.reward.ReinforceReward
+    normalize_fn: std
+    eps: 1e-4
+    reference_dataset: mp-20
+    components:
+      # --- base DNG rewards ---
+      - _target_: src.rl_module.components.CreativityReward
+        weight: 1.0
+        normalize_fn: null
+      - _target_: src.rl_module.components.StructureDiversityReward
+        weight: 0.1
+        normalize_fn: norm
+      - _target_: src.rl_module.components.CompositionDiversityReward
+        weight: 1.0
+        normalize_fn: norm
+      # EnergyReward (MACE e_above_hull) is excluded until the phase diagram
+      # asset is built. See scripts/prepare_assets.py for instructions.
+      # To re-enable once the file exists, add:
+      #   - _target_: src.rl_module.components.EnergyReward
+      #     weight: 1.0
+      #     normalize_fn: norm
+
+      # --- Phase 1 ferroelectric rewards ---
+      # High weight: hard physical constraint (polar SG is necessary for FE)
+      - _target_: src.rl_module.ferroelectric.PolarSymmetryReward
+        weight: 1.5
+        normalize_fn: null
+        symprec: 0.2   # loose tolerance for unrelaxed structures
+
+      # Medium weight: structural proxy for spontaneous polarization
+      - _target_: src.rl_module.ferroelectric.PolarDistortionReward
+        weight: 0.5
+        normalize_fn: norm
+        norm_factor: 0.3   # displacement (Å) at which reward saturates
+
+      # Low weight: compositional heuristic bias toward known FE families
+      - _target_: src.rl_module.ferroelectric.FEChemistryReward
+        weight: 0.2
+        normalize_fn: null
+
+logger:
+  wandb:
+    name: rl_ferroelectric_grpo

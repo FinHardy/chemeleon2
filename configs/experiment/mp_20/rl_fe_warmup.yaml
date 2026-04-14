@@ -1,0 +1,39 @@
+# @package _global_
+# Warmup phase for ferroelectric RL — base DNG rewards without EnergyReward.
+#
+# EnergyReward is excluded because it requires a pre-computed Materials Project
+# phase diagram (benchmarks/assets/ppd-mp_all_entries_uncorrected_250409.pkl.gz)
+# which must be built separately. See scripts/prepare_assets.py for instructions.
+#
+# Run after: uv run python scripts/prepare_assets.py
+
+data:
+  batch_size: 5
+
+rl_module:
+  ldm_ckpt_path: ${hub:mp_20_ldm_base}
+  vae_ckpt_path: ${hub:mp_20_vae}
+
+  rl_configs:
+    num_group_samples: 64
+    group_reward_norm: true
+
+  reward_fn:
+    _target_: src.rl_module.reward.ReinforceReward
+    normalize_fn: std
+    eps: 1e-4
+    reference_dataset: mp-20
+    components:
+      - _target_: src.rl_module.components.CreativityReward
+        weight: 1.0
+        normalize_fn: null
+      - _target_: src.rl_module.components.StructureDiversityReward
+        weight: 0.1
+        normalize_fn: norm
+      - _target_: src.rl_module.components.CompositionDiversityReward
+        weight: 1.0
+        normalize_fn: norm
+
+logger:
+  wandb:
+    name: rl_fe_warmup
